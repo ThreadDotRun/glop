@@ -18,6 +18,7 @@ Glop is designed for games where the simulation must be:
 ---
 
 <!-- GIF SPLASH &mdash; upload the file to ./assets/ and update the src below -->
+The included game is not playable but is meant to demonstrate that engine mechanics work
 <p align="center">
   <img src="./assets/glop-splash.gif" alt="Glop Engine &mdash; a tick advancing through entities, rules, and events" width="720">
 </p>
