@@ -27,7 +27,7 @@ share/python-wheels/
 MANIFEST
 
 export_code.py
-*.sqlite
+*.sqlite*
 generate_readme.py
 
 # PyInstaller
