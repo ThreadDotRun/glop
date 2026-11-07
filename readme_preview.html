@@ -1,0 +1,715 @@
+<h1>Glop Engine</h1>
+<p>A deterministic, rule-driven simulation kernel for turn-based and
+real-time strategy games. The engine itself knows nothing about units,
+cities, or combat &mdash; it knows about <strong>entities</strong>, <strong>rules</strong>, <strong>events</strong>,
+<strong>actions</strong>, and <strong>transactions</strong>. Everything above that is data.</p>
+<p>Glop is designed for games where the simulation must be:</p>
+<ul>
+<li><strong>Deterministic</strong> &mdash; the same inputs produce the same state, every time.</li>
+<li><strong>Transactional</strong> &mdash; every tick commits atomically or rolls back.</li>
+<li><strong>Data-driven</strong> &mdash; new game mechanics are added by editing JSON, not Python.</li>
+<li><strong>Projectable</strong> &mdash; the same tick can be rendered as text, 2D, or 3D
+  through a read-only projection layer without touching the engine.</li>
+<li><strong>Inspectable</strong> &mdash; every state change is journaled, so the why of a
+  result is always recoverable after the fact.</li>
+</ul>
+<hr />
+<!-- GIF SPLASH &mdash; upload the file to ./assets/ and update the src below -->
+<p align="center">
+  <img src="./assets/glop-splash.gif" alt="Glop Engine &mdash; a tick advancing through entities, rules, and events" width="720">
+</p>
+<!-- END GIF SPLASH -->
+
+<hr />
+<h2>Contents</h2>
+<ul>
+<li><a href="#what-glop-is">What Glop Is</a></li>
+<li><a href="#what-glop-is-not">What Glop Is Not</a></li>
+<li><a href="#core-concepts">Core Concepts</a></li>
+<li><a href="#entity">Entity</a></li>
+<li><a href="#stats-rates-and-statuses">Stats, Rates, and Statuses</a></li>
+<li><a href="#rule">Rule</a></li>
+<li><a href="#event">Event</a></li>
+<li><a href="#action">Action</a></li>
+<li><a href="#transaction-and-journal">Transaction and Journal</a></li>
+<li><a href="#scheduler">Scheduler</a></li>
+<li><a href="#the-tick">The Tick</a></li>
+<li><a href="#condition-language">Condition Language</a></li>
+<li><a href="#action-reference">Action Reference</a></li>
+<li><a href="#the-shadow-interface">The Shadow Interface</a></li>
+<li><a href="#persistence">Persistence</a></li>
+<li><a href="#hosting-a-game">Hosting a Game</a></li>
+<li><a href="#minimal-test-game">Minimal Test Game</a></li>
+<li><a href="#design-constraints-and-trade-offs">Design Constraints and Trade-offs</a></li>
+<li><a href="#extending-the-engine">Extending the Engine</a></li>
+<li><a href="#directory-layout">Directory Layout</a></li>
+</ul>
+<hr />
+<h2>What Glop Is</h2>
+<p>Glop is a <strong>simulation kernel</strong>, not a game framework. It provides:</p>
+<ol>
+<li>An entity store with indexed queries by container, kind, and tag.</li>
+<li>A rules engine that fires on named events and evaluates a small
+   boolean condition language against entity state.</li>
+<li>A staged-action pipeline where every tick s mutations are queued,
+   sorted deterministically, and committed atomically in a single
+   transaction.</li>
+<li>A journal of every change (old value, new value, entity, stat) that
+   downstream code can read to project the tick into another form.</li>
+<li>A scheduler that fires events at a world-time offset, which is how
+   turn clocks, cooldowns, and production cycles are expressed.</li>
+<li>A persistence layer that serializes and restores the entire engine
+   state &mdash; including the scheduler &mdash; to a SQLite store.</li>
+</ol>
+<p>Everything else (units, cities, terrain, combat, economies) is content.
+The same engine can host a dungeon crawler, a 4X game, a roguelike, or a
+puzzle, because none of those nouns appear anywhere in engine.py.</p>
+<h2>What Glop Is Not</h2>
+<ul>
+<li><strong>Not a renderer.</strong> It has no concept of pixels, tiles, cameras, or
+  animation. A separate Shadow module translates the engine s journal
+  into renderer-friendly events and hints.</li>
+<li><strong>Not a physics engine.</strong> Movement is discrete and rule-driven. There
+  is no collision solver, no continuous integration, and no interpolation.</li>
+<li><strong>Not a scripting language.</strong> The condition language is intentionally
+  small: arithmetic, comparison, boolean operators, entity attribute
+  access, and one built-in function (distance). Anything more complex
+  belongs in a rule or in the host s action queue.</li>
+<li><strong>Not multi-tenant.</strong> A single Engine instance holds a single world.
+  Hosting multiple players means running multiple engines or sharding
+  by container.</li>
+<li><strong>Not a database.</strong> Persistence is an opaque snapshot; the engine
+  loads it into memory and does all work there.</li>
+</ul>
+<hr />
+<h2>Core Concepts</h2>
+<h3>Entity</h3>
+<p>An <strong>entity</strong> is a dictionary with a stable id and the following shape:</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;unit_rome_warrior_1&quot;,
+  &quot;kind&quot;: &quot;unit&quot;,
+  &quot;name&quot;: &quot;Roman Warrior&quot;,
+  &quot;tags&quot;: [&quot;military&quot;, &quot;melee&quot;, &quot;roman&quot;],
+  &quot;loc&quot;: { &quot;container&quot;: &quot;plains_1&quot;, &quot;pos&quot;: { &quot;tile&quot;: 15 } },
+  &quot;stats&quot;: { &quot;hp&quot;: 10, &quot;hp_max&quot;: 10, &quot;mp&quot;: 2.0, &quot;mp_max&quot;: 2.0 },
+  &quot;rates&quot;: { &quot;hammers&quot;: 0.0 },
+  &quot;status&quot;: [],
+  &quot;rules&quot;: []
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Required</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>id</td>
+<td>yes</td>
+<td>Unique string key in engine.ents.</td>
+</tr>
+<tr>
+<td>kind</td>
+<td>no</td>
+<td>Coarse classifier: unit, city, player, environment. Host-defined.</td>
+</tr>
+<tr>
+<td>name</td>
+<td>no</td>
+<td>Display name. Defaults to id if absent.</td>
+</tr>
+<tr>
+<td>tags</td>
+<td>no</td>
+<td>List of strings used for queries and by the condition language.</td>
+</tr>
+<tr>
+<td>loc</td>
+<td>no</td>
+<td>container and pos, where pos is a dict of numeric axes (tile, x, y).</td>
+</tr>
+<tr>
+<td>stats</td>
+<td>no</td>
+<td>Numeric fields. Written by modify_stat, read by conditions.</td>
+</tr>
+<tr>
+<td>rates</td>
+<td>no</td>
+<td>Per-tick continuous contributions to stats.</td>
+</tr>
+<tr>
+<td>status</td>
+<td>no</td>
+<td>Active timed effects. Managed by apply_status.</td>
+</tr>
+<tr>
+<td>rules</td>
+<td>no</td>
+<td>List of trigger, condition, action dicts.</td>
+</tr>
+</tbody>
+</table>
+<p>The engine does not enforce a schema. If a field is absent, defaults are
+supplied on load (rates = {}, status = [], stats = {}, rules = []).</p>
+<h3>Stats, Rates, and Statuses</h3>
+<p>Three layers of numeric state:</p>
+<ul>
+<li><strong>stats</strong> &mdash; instantaneous values. Written by modify_stat and by any
+  host code calling engine.execute_action(...) with a modify_stat action.</li>
+<li><strong>rates</strong> &mdash; continuous per-second contributions. Every integrate(dt)
+  adds rate * dt to the corresponding stat, as a journaled stat change.
+  Use rates for income, regen, decay, or anything that should accrue
+  smoothly over time.</li>
+<li><strong>status</strong> &mdash; active effects with a duration and optional rate. A
+  status rate is added to engine.rates[stat] while it is active and
+  removed when it expires.</li>
+</ul>
+<p>Rates and statuses are how you express accumulate over time without
+scheduling an event per tick. Use scheduled events for one-shot
+transitions (production complete, cooldown ready), and rates for
+continuous quantities (gold per second, MP regen, starvation).</p>
+<h3>Rule</h3>
+<p>A <strong>rule</strong> is a triple:</p>
+<pre><code class="language-json">{
+  &quot;trigger&quot;: &quot;production_complete&quot;,
+  &quot;condition&quot;: &quot;target == self and stats.hammers &gt;= 10&quot;,
+  &quot;action&quot;: { &quot;type&quot;: &quot;spawn&quot;, &quot;ent&quot;: { } }
+}
+</code></pre>
+<ul>
+<li><strong>trigger</strong> &mdash; a named event. When that event is dispatched, every
+  entity that has a rule with that trigger is visited and its
+  condition is evaluated.</li>
+<li><strong>condition</strong> &mdash; a boolean expression in the condition language.
+  Evaluated at dispatch time, against live state. If it does not parse,
+  the rule does not fire and a warning is printed.</li>
+<li><strong>action</strong> &mdash; the action to stage if the condition is true. Staged
+  actions are committed together at the end of the tick.</li>
+</ul>
+<p>Rules are indexed by trigger. Adding or removing a rule on an entity
+updates the index incrementally; the index can be rebuilt from scratch
+with engine._rebuild_index() if it ever drifts.</p>
+<h3>Event</h3>
+<p>An <strong>event</strong> is a named string (tick, attack, found_city,
+production_complete, or anything the content defines). Events are
+dispatched by three sources:</p>
+<ol>
+<li><strong>engine.integrate(dt)</strong> &mdash; the tick fires automatically.</li>
+<li><strong>engine._input_queue</strong> &mdash; inputs queued by the host (or by an
+   InputBridge) are drained at the end of each tick.</li>
+<li><strong>engine.dispatch_event(name, source, context)</strong> &mdash; the host can
+   dispatch an event immediately, bypassing the queue.</li>
+</ol>
+<p>Every entity with a rule whose trigger matches the dispatched event
+name is visited, its condition is evaluated, and its action is staged if
+true. Conditions are evaluated against live state at dispatch time, but
+actions do not run until commit. This is the most important semantic
+in the engine.</p>
+<h3>Action</h3>
+<p>An <strong>action</strong> is a dict with a type field. The engine ships with ten:</p>
+<ul>
+<li>modify_stat &mdash; additive change to a stat.</li>
+<li>move_toward &mdash; step an entity positional axis toward another entity.</li>
+<li>move_to &mdash; teleport an entity to a tile.</li>
+<li>apply_status &mdash; add a timed effect with an optional rate.</li>
+<li>add_rate &mdash; modify an entity continuous rate.</li>
+<li>schedule &mdash; queue an event at world_time + in.</li>
+<li>destroy &mdash; remove an entity.</li>
+<li>spawn &mdash; create an entity from an inline template.</li>
+<li>move_container &mdash; change the entity container.</li>
+<li>emit &mdash; dispatch another event immediately.</li>
+</ul>
+<p>See Action Reference for fields and validation.</p>
+<h3>Transaction and Journal</h3>
+<p>Every call to integrate(dt) creates a Transaction. The transaction:</p>
+<ul>
+<li>Holds a list of PendingActions, each with a priority, a monotonically
+  increasing sequence number, the source entity, the action, and a
+  context dict.</li>
+<li>Writes changes to engine.ents immediately. This is why dispatch-time
+  conditions see partially-updated state &mdash; see The Tick.</li>
+<li>Journals each change as (kind, path, old_value) where kind is one of
+  stat, rate, pos, container, insert, delete, world_time, sched_push, or
+  sched_pop.</li>
+<li>On success, commits: sorts pending by (priority, seq) and applies each
+  action via _apply_action.</li>
+<li>On exception, rolls back: walks the journal in reverse, restoring each
+  old value, and reports whether the tick had made any mutations.</li>
+</ul>
+<p>The journal is also the projection surface for the Shadow module. The
+shadow consumes the ordered journal and emits semantic events and render
+hints without ever touching the engine internals.</p>
+<h3>Scheduler</h3>
+<p>The scheduler is a heap of (at, seq, event, target, context) tuples.
+Every tick, after advancing world_time, the engine pops all entries
+with at &lt;= world_time and dispatches each as an event. Entries whose
+target no longer exists are silently dropped.</p>
+<p>schedule(in=1.0, event=production_complete, target=city_rome) means one
+world-second from now, fire production_complete on city_rome. The context
+dict carried in the schedule entry is passed through to the dispatched
+rules as the event context, which is how cross-faction guards like
+target == self are expressed.</p>
+<hr />
+<h2>The Tick</h2>
+<p>engine.integrate(dt) proceeds in seven phases. Understanding the order
+is essential to writing correct rules.</p>
+<h3>Phase 1 &mdash; Rate application</h3>
+<p>For every entity, every nonzero rate is added to the corresponding stat
+as stat += rate * dt, and the change is journaled. This happens before
+any event dispatch, so a rate is always applied before the tick rules see
+the stat.</p>
+<h3>Phase 2 &mdash; Advance world time</h3>
+<p>world_time is set to world_time + dt and journaled.</p>
+<h3>Phase 3 &mdash; Scheduler drain</h3>
+<p>The engine pops scheduler entries whose at &lt;= world_time and dispatches
+each as an event. Dispatch visits every entity with a rule on that
+trigger, evaluates its condition against live state, and stages its
+action if true.</p>
+<p>Staged actions do not run yet. They sit in txn.pending until commit.
+This means all scheduled events in a tick dispatch against the same
+pre-commit state &mdash; a rule fired by one scheduled event does not see the
+side effects of another scheduled event rules. This is why the condition
+language needs explicit existence checks (distance(id) &lt; 99 for exists,
+distance(id) &gt; 99 for absent) rather than reading a just spawned flag &mdash;
+those flags would not be visible during dispatch.</p>
+<h3>Phase 4 &mdash; Status expiry</h3>
+<p>Active statuses have their duration decremented by dt. Any status whose
+duration is &lt;= 0 is removed, and its rate (if any) is subtracted from
+engine.rates so it no longer contributes to the next tick.</p>
+<h3>Phase 5 &mdash; Tick event</h3>
+<p>tick is dispatched with context {dt: dt}. This is where most per-tick
+logic lives: regen, auto-combat, death checks, and per-tick state
+machines. Conditions see the fully rate-applied, time-advanced state, but
+no staged actions from phases 3 or 5 have been applied yet.</p>
+<h3>Phase 6 &mdash; Input drain</h3>
+<p>Any entries in engine._input_queue are dispatched in order. Each entry is
+{event: name, source: source_id, actor: actor_id, data: { }} and the
+engine merges data into the event context. This is the path the host uses
+to deliver player inputs, and it is the last point before commit at which
+new actions can be staged.</p>
+<h3>Phase 7 &mdash; Commit</h3>
+<p>txn.pending is sorted by (priority, seq) &mdash; priority defaults to 50, and
+seq is assigned at staging time &mdash; and each action is applied in order via
+_apply_action. This is the only phase in which actions have their side
+effects.</p>
+<p>If any phase raises, the transaction rolls back and integrate re-raises.
+The exception types are:</p>
+<ul>
+<li>EmitDepthExceeded &mdash; an emit chain exceeded MAX_EMIT_DEPTH (8).</li>
+<li>SchedulerOverflow &mdash; a single tick drained more than
+  MAX_SCHED_EVENTS_PER_TICK (1000) scheduled entries.</li>
+</ul>
+<h3>Summary table</h3>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Dispatch?</th>
+<th>Apply?</th>
+<th>Sees rate change?</th>
+<th>Sees previous dispatch s actions?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 Rates</td>
+<td>&mdash;</td>
+<td>writes stats</td>
+<td>&mdash;</td>
+<td>&mdash;</td>
+</tr>
+<tr>
+<td>2 Time</td>
+<td>&mdash;</td>
+<td>sets world_time</td>
+<td>yes</td>
+<td>&mdash;</td>
+</tr>
+<tr>
+<td>3 Scheduler</td>
+<td>yes</td>
+<td>stages only</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>4 Status</td>
+<td>&mdash;</td>
+<td>removes/restores rates</td>
+<td>yes</td>
+<td>&mdash;</td>
+</tr>
+<tr>
+<td>5 Tick</td>
+<td>yes</td>
+<td>stages only</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>6 Inputs</td>
+<td>yes</td>
+<td>stages only</td>
+<td>yes</td>
+<td>no</td>
+</tr>
+<tr>
+<td>7 Commit</td>
+<td>&mdash;</td>
+<td>applies everything</td>
+<td>yes</td>
+<td>yes (within seq order)</td>
+</tr>
+</tbody>
+</table>
+<p>The takeaway: <strong>within a tick, conditions always see the pre-commit
+state. Across ticks, they see everything from the previous commit.</strong></p>
+<hr />
+<h2>Condition Language</h2>
+<p>Conditions are Python expressions parsed with ast.parse(..., mode='eval')
+and evaluated by Engine.eval_ast. Supported constructs:</p>
+<h3>Literals and names</h3>
+<ul>
+<li>Numeric and string literals: 10, "400", 2.0.</li>
+<li>true / false &mdash; booleans.</li>
+<li>self &mdash; the id of the entity whose rule is firing.</li>
+<li>A bare name that matches an entity id resolves to that entity dict
+  if it exists, or to source_ent.stats.get(name, 0.0) if it does not.
+  This dual behavior is used for the existence idiom (distance(id) &gt; 99).</li>
+<li>A bare name that matches a context key resolves to the context value.</li>
+</ul>
+<h3>Attribute access</h3>
+<ul>
+<li>self.stats.hp &mdash; the firing entity hp stat.</li>
+<li>city_rome_city.stats.hp &mdash; another entity stat.</li>
+<li>target.stats.hp &mdash; the stat of whatever target is (usually a
+  context value or a resolved entity id).</li>
+<li>context.foo is not supported. Use the bare name foo instead;
+  eval_ast will fall back to context["foo"] if it is present.</li>
+</ul>
+<h3>Operators</h3>
+<ul>
+<li>Arithmetic: +, -, *, /.</li>
+<li>Comparison: &lt;, &gt;, &lt;=, &gt;=, ==, !=.</li>
+<li>Boolean: and, or.</li>
+</ul>
+<p>not is not supported. Use != to express negation:
+target != self means target is not self. id != 0 means id
+exists.</p>
+<h3>Function</h3>
+<ul>
+<li>distance(<entity_id>) &mdash; the Euclidean distance between the firing
+  entity and the named entity. Returns float('inf') if the named
+  entity does not exist, so distance(id) &gt; 99 is the standard
+  does not exist or is very far check, and distance(id) &lt; 99 is the
+  standard exists and is nearby check.</li>
+</ul>
+<p>Any other function call returns float('inf')</p>
+<h3>Idioms</h3>
+<table>
+<thead>
+<tr>
+<th>Intent</th>
+<th>Expression</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Entity exists</td>
+<td>distance(<id>) &lt; 99</td>
+</tr>
+<tr>
+<td>Entity absent</td>
+<td>distance(<id>) &gt; 99</td>
+</tr>
+<tr>
+<td>Enemy is adjacent</td>
+<td>distance(<enemy_id>) &lt; 2</td>
+</tr>
+<tr>
+<td>Is this me?</td>
+<td>target == self</td>
+</tr>
+<tr>
+<td>Is this NOT me?</td>
+<td>target != self</td>
+</tr>
+<tr>
+<td>Stat below threshold</td>
+<td>stats.hp &lt; stats.hp_max</td>
+</tr>
+</tbody>
+</table>
+<p>If you need a condition the language cannot express, the correct
+response is a new entity, a new stat, or a new small action &mdash; not a
+larger expression.</p>
+<hr />
+<h2>Action Reference</h2>
+<p>All actions are dicts with a type and, depending on the type, required
+fields. Validation runs at stage time via _validate_action, so a
+malformed action fails the tick before any of its side effects commit.</p>
+<h3>modify_stat</h3>
+<p>Add value to stat on target. value must be numeric.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;modify_stat&quot;, &quot;target&quot;: &quot;self&quot;, &quot;stat&quot;: &quot;mp&quot;, &quot;value&quot;: &quot;-1&quot; }
+</code></pre>
+<h3>move_toward</h3>
+<p>Step source positional axis toward target by up to speed.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;move_toward&quot;, &quot;target&quot;: &quot;unit_rome_warrior_1&quot;, &quot;speed&quot;: 1 }
+</code></pre>
+<h3>move_to</h3>
+<p>Set target tile axis to tile.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;move_to&quot;, &quot;target&quot;: &quot;self&quot;, &quot;tile&quot;: 15 }
+</code></pre>
+<h3>apply_status</h3>
+<p>Add a timed effect with an id, duration, and optional rate.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;apply_status&quot;, &quot;target&quot;: &quot;self&quot;, &quot;status_id&quot;: &quot;poison&quot;,
+  &quot;duration&quot;: 5.0, &quot;rate&quot;: { &quot;hp&quot;: -1.0 } }
+</code></pre>
+<h3>add_rate</h3>
+<p>Modify target continuous rates by a dict of deltas.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;add_rate&quot;, &quot;target&quot;: &quot;self&quot;, &quot;rate&quot;: { &quot;hammers&quot;: 1.0 } }
+</code></pre>
+<h3>schedule</h3>
+<p>Queue an event at world_time + in for target, carrying context.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;schedule&quot;, &quot;in&quot;: 1.0, &quot;event&quot;: &quot;production_complete&quot;,
+  &quot;target&quot;: &quot;city_rome_city&quot;, &quot;context&quot;: { &quot;target&quot;: &quot;city_rome_city&quot; } }
+</code></pre>
+<p>The context dict is preserved through dispatch and is how cross-faction
+guards like target == self are expressed. If you schedule an event
+whose rules use target == self, you must set context.target to the
+recipient id. Otherwise target will be None and the guard will
+silently fail.</p>
+<h3>destroy</h3>
+<p>Remove target from the engine.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;destroy&quot;, &quot;target&quot;: &quot;self&quot; }
+</code></pre>
+<h3>spawn</h3>
+<p>Create a new entity from an inline template. If the template id is
+already present, the spawn is skipped (logged, not raised).</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;spawn&quot;, &quot;ent&quot;: { &quot;id&quot;: &quot;...&quot;, &quot;kind&quot;: &quot;unit&quot;, ... } }
+</code></pre>
+<h3>move_container</h3>
+<p>Move target to a different container. Maintains the container index.</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;move_container&quot;, &quot;target&quot;: &quot;self&quot;, &quot;container&quot;: &quot;forest_1&quot; }
+</code></pre>
+<h3>emit</h3>
+<p>Immediately dispatch another event with a nested context. Depth is
+limited by MAX_EMIT_DEPTH (8).</p>
+<pre><code class="language-json">{ &quot;type&quot;: &quot;emit&quot;, &quot;event&quot;: &quot;build_phase&quot;, &quot;target&quot;: &quot;self&quot; }
+</code></pre>
+<p>Caveat: emit does not merge action.target into the dispatched
+context. If the emitted event rules use target, pass it through
+context (which the action supports but which is rarely used). In
+practice, direct modify_stat on a literal entity id is preferred over
+emit for tick-based logic, because it avoids this footgun entirely.</p>
+<hr />
+<h2>The Shadow Interface</h2>
+<p>Shadow is a <strong>read-only projection</strong> over the engine transaction
+journal. It does not mutate the engine and does not require the engine
+to know anything about rendering.</p>
+<pre><code class="language-python">from shadow import Shadow
+
+shadow = Shadow(engine)
+txn = engine.integrate(1.0)
+shadow.consume(txn)
+
+for ev in shadow.frame_events():
+    # ENTITY_SPAWNED, ENTITY_MOVED, ENTITY_DAMAGED, ENTITY_HEALED,
+    # ENTITY_DIED, STAT_CHANGED, STATUS_APPLIED, STATUS_EXPIRED,
+    # CONTAINER_CHANGED, SCHEDULER_UPDATED, TICK_ADVANCED
+    ...
+
+for hint in shadow.render_hints():
+    # damage_flash, floating_damage_number, spawn_effect,
+    # death_effect, sound_cue
+    ...
+
+text_lines = shadow.narrative(perspective=&quot;rome&quot;)
+</code></pre>
+<p>Three principles govern the shadow:</p>
+<ol>
+<li><strong>No deduplication.</strong> If a tick produces five damage events on the
+   same entity, the shadow reports five events. Merging them would lose
+   information a renderer might want (five separate flash triggers, five
+   separate sound cues).</li>
+<li><strong>No engine knowledge.</strong> The shadow only knows the journal vocabulary
+   (stat, pos, container, insert, delete, sched_push, sched_pop) and the
+   meaning of the hp stat. If you add a new stat that should produce a
+   specific visual, extend the shadow &mdash; do not extend the engine.</li>
+</ol>
+<p>The narrative(perspective) method is a human-readable filter over the
+frame events. It is used by the harness to produce the text log and is
+not required by any renderer. It skips movement and scheduler churn to
+reduce noise.</p>
+<hr />
+<h2>Persistence</h2>
+<p>Engine.save(store) serializes the entire engine state &mdash; entities,
+containers, world time, and the scheduler heap &mdash; into a GameStore
+(SQLite by default). Engine.load(store) reconstructs an engine from
+that snapshot, including the rule index and container index, without
+re-parsing ents.json or containers.json.</p>
+<p>Because the scheduler is part of the snapshot, a save mid-build
+resumes the build on load. This is why the engine has no turn counter
+separate from world_time &mdash; the world time is the turn counter,
+and it is saved.</p>
+<p>The store interface is three methods (exists, save, load). Any
+storage that can round-trip a dict of engine state can be swapped in.</p>
+<hr />
+<h2>Hosting a Game</h2>
+<p>The engine is transport-agnostic. The canonical pattern is:</p>
+<ol>
+<li>Load an Engine from ents.json and containers.json (or from a save).</li>
+<li>Read input from the host (a terminal, an HTTP request, a socket).</li>
+<li>Deliver the input to the engine via engine._input_queue.append</li>
+<li>Advance the simulation with engine.integrate(dt).</li>
+<li>Project the resulting state to the host.</li>
+</ol>
+<p>The engine ships with a minimal InputBridge that validates source and
+actor against a configured set of allowed sources and dispatches the
+input on the engine behalf. It is intentionally thin; most hosts will
+either use it directly or bypass it and call engine._input_queue.append
+with the same payload shape:</p>
+<pre><code class="language-python">engine._input_queue.append({
+    &quot;event&quot;: &quot;attack&quot;,
+    &quot;source&quot;: &quot;rome&quot;,
+    &quot;actor&quot;: &quot;unit_rome_warrior_1&quot;,
+    &quot;data&quot;: {&quot;target&quot;: &quot;city_tenochtitlan_city&quot;},
+})
+</code></pre>
+<p>The payload shape is part of the engine public contract. The
+engine merges {source: ..., actor: ..., **data} into the event
+context before dispatch, so an action condition can reference
+target (from data) directly.</p>
+<hr />
+<h2>Minimal Test Game</h2>
+<p>The repository ships with one example game under
+<a href="games/dungeon_crawler/">games/dungeon_crawler/</a>. It is a minimal playable 4X skirmish used to
+exercise the engine features:</p>
+<ul>
+<li><strong>Two factions</strong> (Rome and Aztec), each with a starting capital.</li>
+<li><strong>Cities</strong> that accumulate production and spawn units (warriors,
+  jaguars, settlers).</li>
+<li><strong>Player-chosen production</strong> via a choose command, with auto-advance
+  on completion (a city_production_complete event).</li>
+<li><strong>Combat</strong> via tick-range auto-attack and via explicit attack
+  events, with a check_death cleanup pass.</li>
+<li><strong>Victory</strong> by destroying every enemy unit and city, surfaced as a
+  banner in the web UI.</li>
+<li>A <strong>12x12 map</strong> with positions chosen so the two capitals are
+  reachable in about a dozen turns.</li>
+</ul>
+<p>The example is not a template. It is a fixture &mdash; its purpose is to prove
+that the engine can host a complete, winnable session with no engine
+changes. Anything in games/dungeon_crawler/ (including the Flask web
+harness and the 2D canvas renderer) is optional and can be replaced
+without touching engine.py.</p>
+<p>To run it:</p>
+<pre><code class="language-bash">pip install flask
+python games/dungeon_crawler/main.py
+# open http://127.0.0.1:5000
+</code></pre>
+<p>See games/dungeon_crawler/README.md for commands and mechanics.</p>
+<hr />
+<h2>Design Constraints and Trade-offs</h2>
+<p>These are deliberate choices, not oversights. Changing any of them is a
+significant engine change, not a bug fix.</p>
+<h3>No set_stat</h3>
+<p>There is no action that sets a stat to an absolute value. Set to zero
+is expressed as a large negative modify_stat, and set to max is
+expressed as a guarded modify_stat that never overshoots because its condition checks stat &lt; max. This is intentional: absolute sets are
+easy to misuse and hard to roll back meaningfully. If you find yourself
+needing one, the correct fix is usually a new stat or a different guard.</p>
+<h3>Unclamped modify_stat</h3>
+<p>Stats can go negative or exceed their nominal maxima. There is no
+generic clamp. Content is responsible for bounding its own values
+through guards (stats.hp &gt; 0 before damage, stats.mp &lt; stats.mp_max
+before regen). Clamping would make the tick journal inconsistent with
+what the rules observe at dispatch time.</p>
+<h3>Staged actions, live conditions</h3>
+<p>Conditions see pre-commit state. This is the trade-off that makes the
+scheduler fan-out behavior observable: if two scheduled events fire in
+the same tick, neither sees the other spawned entities. Content that
+needs cross-event coordination must use existence checks and per-tick
+state machines rather than shared flags. See The Tick.</p>
+<h3>not is not a keyword</h3>
+<p>Negation is expressed by != on entities (target != self) and by
+choosing the complementary comparison (distance(id) &gt; 99 for absent).
+This is a deliberate limitation of the condition parser; adding not
+would require a proper boolean parser and would invite complex nested
+expressions that are hard to debug.</p>
+<h3>Entity ids are content responsibility</h3>
+<p>The engine does not generate unique ids. The spawn action skips if the
+id already exists. Content that needs repeated spawns must pre-register
+a pool of ids (e.g., warrior_1, warrior_2, warrior_3) and spawn
+them in order, or extend the engine with an id-sequence stat (a
+significant change).</p>
+<h3>One action per rule</h3>
+<p>A rule has one action. Multi-step behaviors are expressed as multiple
+rules with the same trigger and condition. They are staged in rule-list
+order and committed in (priority, seq) order, so they behave as a
+sequence &mdash; but each sees the pre-commit state of the others stats.</p>
+<h3>No context reads in conditions</h3>
+<p>The condition language reads context only via bare name fallback. You
+cannot write context.target &mdash; use target, which will resolve to
+context["target"] if it is present, or source_ent.stats.get("target", 0.0)
+if it is not.</p>
+<hr />
+<h2>Extending the Engine</h2>
+<p>If you outgrow the engine primitives, here are the extensions that
+retain its design:</p>
+<ul>
+<li><strong>set_stat action</strong> &mdash; 5 lines in _apply_action, plus a validation
+  entry. Useful for exact resets and for any content that needs set to
+  a specific value. The cost is that a bad value is not observable at
+  dispatch time.</li>
+<li><strong>Generic clamp</strong> &mdash; a small STAT_CLAMPS map in _apply_action's
+  modify_stat branch, keyed by stat name. Content adds mp_max,
+  hp_max, and similar paired stats and the engine clamps after every
+  write.</li>
+<li>set_stat action &mdash; 5 lines in _apply_action, plus a validation
+  entry. Useful for exact resets and for any content that needs set to
+  a specific value. The cost is that a bad value is not observable at
+  dispatch time.</li>
+<li><strong>Generic clamp</strong> &mdash; a small STAT_CLAMPS table in _apply_action's
+  modify_stat branch, keyed by stat name. Content adds mp_max,
+  hp_max, and similar paired stats and the engine clamps after every
+  write.</li>
+<li><strong>emit with target to context</strong> &mdash; one line in _apply_action's
+  emit branch: new_ctx.setdefault("target", action.get("target")).
+  Closes the gap where tick-emitted attacks have no target.</li>
+<li><strong>Unique id generation</strong> &mdash; add a next_id counter to the faction's
+  stats, read it in the spawn template's id via a new format action,
+  and increment it. This is the largest of the proposed changes and
+  should be done only when content genuinely needs unbounded spawning.</li>
+</ul>
+<p>Each of these is a small, localized addition. None requires a redesign.
+The engine shape &mdash; journal, transaction, scheduler, dispatch &mdash; is
+stable, and the extensions compose with it rather than replacing it.</p>
+<hr />
+<h2>Directory Layout</h2>
+<pre><code>dev/glop/
+├── engine.py                 # the simulation kernel
+├── input_bridge.py           # optional input validation/dispatch helper
+├── persistence.py            # GameStore (SQLite snapshot)
+├── shadow.py                 # read-only projection over the journal
+├── README.md                 # this file
+├── assets/
+│   └── glop-splash.gif       # splash image (upload separately)
+└── games/
+    └── dungeon_crawler/      # minimal test game
+        ├── README.md
+        ├── main.py           # Flask web harness
+        ├── ents.json         # content: factions, cities, units, clock
+        ├── containers.json   # content: containers and their bounds
+        ├── test_shadow.py    # data/engine invariant smoke test
+        └── templates/
+            ├── index.html
+            ├── style.css
+            └── 2drender.js
+</code></pre>
+<p>The engine has no imports from any game. Every game imports the engine.
+Any file inside games/ can be deleted and the engine still runs.</p>

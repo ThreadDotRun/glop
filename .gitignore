@@ -28,6 +28,7 @@ MANIFEST
 
 export_code.py
 *.sqlite
+generate_readme.py
 
 # PyInstaller
 *.manifest
