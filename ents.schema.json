@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/ents.schema.json",
+  "title": "Universal Entity Store",
+  "description": "Atomic actor records with fourth-dimension time primitives.",
+  "type": "object",
+  "required": ["game_id", "game_type", "schema_version", "ents"],
+  "additionalProperties": false,
+  "properties": {
+    "game_id": { "type": "string", "minLength": 1 },
+    "game_type": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "ents": { "type": "array", "items": { "$ref": "#/definitions/ent" } }
+  },
+  "definitions": {
+    "metaBag": { "type": "object", "additionalProperties": true },
+    "pos": { "type": "object", "additionalProperties": true },
+    "loc": {
+      "type": "object",
+      "required": ["container", "pos"],
+      "properties": {
+        "container": { "type": "string" },
+        "pos": { "$ref": "#/definitions/pos" },
+        "rot": { "type": "object", "additionalProperties": true },
+        "scale": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "rates": {
+      "type": "object",
+      "description": "Continuous derivatives applied analytically per integrate(dt).",
+      "additionalProperties": { "type": "number" }
+    },
+    "scheduleEntry": {
+      "type": "object",
+      "required": ["at", "event"],
+      "properties": {
+        "at": { "type": "number", "description": "World-time to fire at." },
+        "event": { "type": "string" },
+        "target": { "type": "string" },
+        "context": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "statusEffect": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "duration": { "type": "number" },
+        "stacks": { "type": "integer", "minimum": 1 },
+        "source": { "type": "string" },
+        "rate": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "rule": {
+      "type": "object",
+      "required": ["trigger", "condition", "action"],
+      "properties": {
+        "trigger": { "type": "string" },
+        "condition": { "type": "string" },
+        "action": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "type": "string" } },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "ent": {
+      "type": "object",
+      "required": ["id", "kind", "name", "loc"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string" },
+        "subtype": { "type": "string" },
+        "name": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+
+        "loc": { "$ref": "#/definitions/loc" },
+        "stats": { "type": "object", "additionalProperties": { "type": "number" } },
+        "rates": { "$ref": "#/definitions/rates" },
+        "t": { "type": "number", "description": "Last world-time this ent was integrated." },
+        "schedule": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/scheduleEntry" }
+        },
+        "status": { "type": "array", "items": { "$ref": "#/definitions/statusEffect" } },
+        "rules": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
+
+        "inventory": { "type": "object", "additionalProperties": true },
+        "equipment": { "type": "object", "additionalProperties": { "type": ["string", "null"] } },
+
+        "faction": { "type": "string" },
+        "owner_id": { "type": "string" },
+
+        "meta": { "$ref": "#/definitions/metaBag" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,188 @@
+<!-- dev/glop/games/dungeon_crawler/templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Civ Engine</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Civ Engine</h1>
+    <p>a 4x simulation built on rules</p>
+  </header>
+
+  <main class="stage">
+    <div class="game-panes">
+      <section class="room-panel">
+        <h2 id="room-name">—</h2>
+        <p class="desc" id="room-desc"></p>
+        <div class="stats">
+          <span><span class="stat-label">HAMMERS</span> <span class="stat-value" id="stat-ham">—</span></span>
+          <span><span class="stat-label">BEAKERS</span> <span class="stat-value" id="stat-beak">—</span></span>
+          <span><span class="stat-label">GOLD</span> <span class="stat-value gold" id="stat-gold">0</span></span>
+          <span><span class="stat-label">FOOD</span> <span class="stat-value" id="stat-food">0</span></span>
+          <span><span class="stat-label">BUILD</span> <span class="stat-value" id="stat-build">—</span></span>
+        </div>
+        <div class="entity-list" id="entities"></div>
+      </section>
+
+      <section class="map-panel">
+        <div class="terminal-header">
+          <span><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span> map_viewport</span>
+          <span>Click to select / move / attack</span>
+        </div>
+        <div class="map-canvas">
+          <canvas id="map-canvas" width="450" height="450"></canvas>
+        </div>
+      </section>
+    </div>
+
+    <section class="terminal-wrap">
+      <div class="terminal-header">
+        <span><span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span> console</span>
+        <span id="clock">turn=—</span>
+      </div>
+      <div id="terminal"></div>
+    </section>
+  </main>
+
+  <div class="input-row">
+    <input id="cmd" placeholder="try 'wait' or 'found'" autofocus autocomplete="off">
+    <button id="send">Send</button>
+  </div>
+
+  <aside class="side">
+    <div class="panel">
+      <h3>Instructions</h3>
+      <ul>
+        <li><span class="cmd">found</span> — settle the plains (consumes settler)</li>
+        <li><span class="cmd">wait</span> — pass a turn</li>
+        <li>Click a blue unit to select it.</li>
+        <li>Click a tile to move.</li>
+        <li>Click a red enemy to attack.</li>
+      </ul>
+    </div>
+  </aside>
+
+  <script src="2drender.js"></script>
+  <script>
+    const term = document.getElementById('terminal');
+    const cmd = document.getElementById('cmd');
+    const send = document.getElementById('send');
+    const canvas = document.getElementById('map-canvas');
+    const renderer = new Renderer2D('map-canvas');
+
+    function appendLine(text, cls) {
+      const div = document.createElement('div');
+      if (cls) div.className = cls;
+      div.textContent = text;
+      term.appendChild(div);
+    }
+
+    function renderLog(lines) {
+      term.innerHTML = '';
+      for (const line of lines) {
+        let cls = '';
+        if (line.startsWith('> ')) cls = 'prompt';
+        else if (line.startsWith('  ***')) cls = 'danger';
+        else if (line.startsWith('  [')) cls = 'system';
+        appendLine(line, cls);
+      }
+      term.scrollTop = term.scrollHeight;
+    }
+
+    function renderState(s) {
+      document.getElementById('room-name').textContent = s.container_name;
+      document.getElementById('room-desc').textContent = s.container_desc;
+      document.getElementById('stat-ham').textContent = Math.floor(s.hammers);
+      document.getElementById('stat-beak').textContent = Math.floor(s.beakers);
+      document.getElementById('stat-gold').textContent = Math.floor(s.gold);
+      document.getElementById('stat-food').textContent = Math.floor(s.food);
+      document.getElementById('stat-build').textContent = (s.ready_to_build ?? 0).toFixed(2);
+      document.getElementById('clock').textContent = 'turn=' + (s.world_time ?? 0).toFixed(0);
+
+      const ents = document.getElementById('entities');
+      ents.innerHTML = '';
+      for (const e of s.entities) {
+        const el = document.createElement('div');
+        el.className = 'entity';
+        if (e.id === s.active_unit) {
+          el.style.border = '2px solid #ffd700';
+          el.style.background = 'rgba(255, 215, 0, 0.2)';
+          el.style.boxShadow = '0 0 10px #ffd700';
+        }
+        const hpText = (e.hp === null || e.hp === undefined) ? 'hp —' : `hp ${e.hp}`;
+        const mpText = (e.mp === null || e.mp === undefined) ? ''
+          : `<span class="mp">mp ${e.mp.toFixed(1)}${e.mp_max ? '/' + e.mp_max.toFixed(1) : ''}</span>`;
+        let selectBtn = '';
+        if (e.tags.includes('roman') && e.kind === 'unit') {
+          selectBtn = `<button class="select-btn" data-id="${e.id}"
+            style="margin-left:8px;background:#5c0045;border:1px solid #ffd700;color:#fff;cursor:pointer;border-radius:4px;">Select</button>`;
+        }
+        const tile = (e.pos && e.pos.tile !== undefined) ? e.pos.tile : '?';
+        el.innerHTML = `<strong>${e.name}</strong> <span class="hp">${hpText}</span> ${mpText}
+                        <span class="pos">tile ${tile}</span> ${selectBtn}`;
+        ents.appendChild(el);
+      }
+
+      document.querySelectorAll('.select-btn').forEach(btn => {
+        btn.onclick = (evt) => {
+          evt.stopPropagation();
+          sendCommand(`activate ${btn.getAttribute('data-id')}`);
+        };
+      });
+    }
+
+    canvas.addEventListener('click', (evt) => {
+      if (!renderer._lastState) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const cx = (evt.clientX - rect.left) * scaleX;
+      const cy = (evt.clientY - rect.top) * scaleY;
+      const tileId = renderer.getTileFromClick(cx, cy);
+      if (tileId === null) return;
+      postJson('/api/click', { tile: tileId });
+    });
+
+    async function postJson(url, body) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (data.log) renderLog(data.log);
+      if (data.state) {
+        renderState(data.state);
+        renderer.update(data.state);
+      }
+    }
+
+    async function sendCommand(raw) {
+      if (!raw) return;
+      await postJson('/api/command', { cmd: raw });
+    }
+
+    function submit() {
+      const raw = cmd.value.trim();
+      if (!raw) return;
+      cmd.value = '';
+      sendCommand(raw);
+    }
+
+    async function refresh() {
+      const res = await fetch('/api/state');
+      const data = await res.json();
+      renderLog(data.log);
+      renderState(data.state);
+      renderer.update(data.state);
+    }
+
+    send.addEventListener('click', submit);
+    cmd.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+    refresh();
+  </script>
+</body>
+</html>

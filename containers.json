@@ -1,0 +1,23 @@
+{
+  "game_id": "universal_sim_001",
+  "containers": [
+    {
+      "id": "entrance_hall",
+      "name": "Entrance Hall",
+      "bounds": { "min": [0, 0, 0], "max": [15, 15, 3] },
+      "links": [
+        { "to": "corridor_01", "trigger": { "type": "position", "value": [7, 15, 0], "radius": 1 } }
+      ],
+      "meta": { "tileset": "dungeon_stone", "light": 0.4 }
+    },
+    {
+      "id": "corridor_01",
+      "name": "Dark Corridor",
+      "bounds": { "min": [0, 0, 0], "max": [5, 20, 3] },
+      "links": [
+        { "to": "entrance_hall", "trigger": { "type": "position", "value": [2, 0, 0], "radius": 1 } }
+      ],
+      "meta": { "tileset": "dungeon_stone", "light": 0.1 }
+    }
+  ]
+}

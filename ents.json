@@ -1,0 +1,190 @@
+{
+  "game_id": "civ_1_clone_001",
+  "game_type": "rtc",
+  "schema_version": "1.2.0",
+  "ents": [
+    {
+      "id": "rome",
+      "kind": "player",
+      "name": "Roman Empire",
+      "tags": ["faction"],
+      "loc": { "container": "city_rome", "pos": { "tile": 0 } },
+      "stats": { "hammers": 0, "beakers": 0, "gold": 0, "pop": 1, "food": 2, "ready_to_build": 1.0 },
+      "rates": { "hammers": 2.0, "beakers": 1.0 },
+      "rules": [
+        {
+          "trigger": "found_city",
+          "condition": "true",
+          "action": { "type": "spawn", "ent": {
+            "id": "city_rome_city",
+            "kind": "city",
+            "name": "Rome",
+            "tags": ["city", "player_city"],
+            "loc": { "container": "plains_1", "pos": { "tile": 1 } },
+            "stats": { "hp": 10, "pop": 1 },
+            "rules": []
+          }}
+        },
+        {
+          "trigger": "production_complete",
+          "condition": "stats.ready_to_build > 0",
+          "action": { "type": "emit", "event": "build_phase", "target": "self" }
+        },
+        {
+          "trigger": "build_phase",
+          "condition": "stats.ready_to_build > 0 and stats.hammers >= 10 and distance(unit_rome_warrior) > 99",
+          "action": { "type": "spawn", "ent": {
+            "id": "unit_rome_warrior",
+            "kind": "unit",
+            "name": "Roman Warrior",
+            "tags": ["military", "melee", "roman"],
+            "loc": { "container": "plains_1", "pos": { "tile": 11 } },
+            "stats": { "hp": 10, "str": 3, "mp": 2.0 },
+            "rules": [
+              { "trigger": "tick", "condition": "stats.mp < 2.0", "action": { "type": "modify_stat", "target": "self", "stat": "mp", "value": "2.0" } },
+              { "trigger": "tick", "condition": "distance(unit_aztec_jaguar) < 2", "action": { "type": "emit", "event": "attack", "target": "unit_aztec_jaguar" } },
+              { "trigger": "attack", "condition": "target.stats.hp > 0 and stats.mp > 0", "action": { "type": "modify_stat", "target": "target", "stat": "hp", "value": "-4" } },
+              { "trigger": "attack", "condition": "target.stats.hp > 0 and stats.mp > 0", "action": { "type": "modify_stat", "target": "self", "stat": "mp", "value": "-1" } },
+              { "trigger": "check_death", "condition": "stats.hp <= 0", "action": { "type": "destroy", "target": "self" } }
+            ]
+          }}
+        },
+        {
+          "trigger": "build_phase",
+          "condition": "stats.ready_to_build > 0 and stats.hammers >= 10 and distance(unit_rome_warrior) > 99",
+          "action": { "type": "modify_stat", "target": "self", "stat": "hammers", "value": "-10" }
+        },
+        {
+          "trigger": "build_phase",
+          "condition": "stats.ready_to_build > 0 and stats.hammers >= 10",
+          "action": { "type": "modify_stat", "target": "self", "stat": "ready_to_build", "value": "-1.0" }
+        },
+        {
+          "trigger": "production_complete",
+          "condition": "stats.ready_to_build <= 0",
+          "action": { "type": "modify_stat", "target": "self", "stat": "ready_to_build", "value": "1.0" }
+        }
+      ]
+    },
+    {
+      "id": "aztec",
+      "kind": "player",
+      "name": "Aztec Empire",
+      "tags": ["faction", "ai"],
+      "loc": { "container": "city_tenochtitlan", "pos": { "tile": 0 } },
+      "stats": { "hammers": 0, "beakers": 0, "gold": 0, "pop": 1, "food": 2, "ready_to_build": 1.0 },
+      "rates": { "hammers": 1.5, "beakers": 0.5 },
+      "rules": [
+        {
+          "trigger": "found_city",
+          "condition": "true",
+          "action": { "type": "spawn", "ent": {
+            "id": "city_tenochtitlan_city",
+            "kind": "city",
+            "name": "Tenochtitlan",
+            "tags": ["city", "ai_city"],
+            "loc": { "container": "forest_1", "pos": { "tile": 1 } },
+            "stats": { "hp": 10, "pop": 1 },
+            "rules": []
+          }}
+        },
+        {
+          "trigger": "production_complete",
+          "condition": "stats.ready_to_build > 0",
+          "action": { "type": "emit", "event": "build_phase", "target": "self" }
+        },
+        {
+          "trigger": "build_phase",
+          "condition": "stats.ready_to_build > 0 and stats.hammers >= 10 and distance(unit_aztec_jaguar) > 99",
+          "action": { "type": "spawn", "ent": {
+            "id": "unit_aztec_jaguar",
+            "kind": "unit",
+            "name": "Aztec Jaguar",
+            "tags": ["military", "melee", "aztec"],
+            "loc": { "container": "plains_1", "pos": { "tile": 88 } },
+            "stats": { "hp": 10, "str": 3, "mp": 2.0 },
+            "rules": [
+              { "trigger": "tick", "condition": "stats.mp < 2.0", "action": { "type": "modify_stat", "target": "self", "stat": "mp", "value": "2.0" } },
+              { "trigger": "tick", "condition": "distance(unit_rome_warrior) < 2", "action": { "type": "emit", "event": "attack", "target": "unit_rome_warrior" } },
+              { "trigger": "attack", "condition": "target.stats.hp > 0 and stats.mp > 0", "action": { "type": "modify_stat", "target": "target", "stat": "hp", "value": "-5" } },
+              { "trigger": "attack", "condition": "target.stats.hp > 0 and stats.mp > 0", "action": { "type": "modify_stat", "target": "self", "stat": "mp", "value": "-1" } },
+              { "trigger": "check_death", "condition": "stats.hp <= 0", "action": { "type": "destroy", "target": "self" } }
+            ]
+          }}
+        },
+        {
+          "trigger": "build_phase",
+          "condition": "stats.ready_to_build > 0 and stats.hammers >= 10 and distance(unit_aztec_jaguar) > 99",
+          "action": { "type": "modify_stat", "target": "self", "stat": "hammers", "value": "-10" }
+        },
+        {
+          "trigger": "build_phase",
+          "condition": "stats.ready_to_build > 0 and stats.hammers >= 10",
+          "action": { "type": "modify_stat", "target": "self", "stat": "ready_to_build", "value": "-1.0" }
+        },
+        {
+          "trigger": "production_complete",
+          "condition": "stats.ready_to_build <= 0",
+          "action": { "type": "modify_stat", "target": "self", "stat": "ready_to_build", "value": "1.0" }
+        }
+      ]
+    },
+    {
+      "id": "city_rome_city",
+      "kind": "city",
+      "name": "Rome",
+      "tags": ["city", "player_city"],
+      "loc": { "container": "plains_1", "pos": { "tile": 1 } },
+      "stats": { "hp": 10, "pop": 1 },
+      "rules": []
+    },
+    {
+      "id": "city_tenochtitlan_city",
+      "kind": "city",
+      "name": "Tenochtitlan",
+      "tags": ["city", "ai_city"],
+      "loc": { "container": "forest_1", "pos": { "tile": 1 } },
+      "stats": { "hp": 10, "pop": 1 },
+      "rules": []
+    },
+    {
+      "id": "unit_rome_settler",
+      "kind": "unit",
+      "name": "Roman Settler",
+      "tags": ["civilian", "settler", "roman"],
+      "loc": { "container": "plains_1", "pos": { "tile": 2 } },
+      "stats": { "hp": 5, "str": 0, "mp": 2.0 },
+      "rules": [
+        { "trigger": "tick", "condition": "stats.mp < 2.0", "action": { "type": "modify_stat", "target": "self", "stat": "mp", "value": "2.0" } },
+        { "trigger": "found_city", "condition": "distance(city_rome_city) > 99", "action": { "type": "destroy", "target": "self" } }
+      ]
+    },
+    {
+      "id": "unit_rome_warrior",
+      "kind": "unit",
+      "name": "Roman Warrior",
+      "tags": ["military", "melee", "roman"],
+      "loc": { "container": "plains_1", "pos": { "tile": 11 } },
+      "stats": { "hp": 10, "str": 3, "mp": 2.0 },
+      "rules": [
+        { "trigger": "tick", "condition": "stats.mp < 2.0", "action": { "type": "modify_stat", "target": "self", "stat": "mp", "value": "2.0" } },
+        { "trigger": "tick", "condition": "distance(unit_aztec_jaguar) < 2", "action": { "type": "emit", "event": "attack", "target": "unit_aztec_jaguar" } },
+        { "trigger": "attack", "condition": "target.stats.hp > 0 and stats.mp > 0", "action": { "type": "modify_stat", "target": "target", "stat": "hp", "value": "-4" } },
+        { "trigger": "attack", "condition": "target.stats.hp > 0 and stats.mp > 0", "action": { "type": "modify_stat", "target": "self", "stat": "mp", "value": "-1" } },
+        { "trigger": "check_death", "condition": "stats.hp <= 0", "action": { "type": "destroy", "target": "self" } }
+      ]
+    },
+    {
+      "id": "trigger_turn_end",
+      "kind": "environment",
+      "name": "Turn Clock",
+      "tags": ["clock"],
+      "loc": { "container": "plains_1", "pos": { "tile": 99 } },
+      "stats": {},
+      "rules": [
+        { "trigger": "tick", "condition": "true", "action": { "type": "schedule", "in": 1.0, "event": "production_complete", "target": "rome" } },
+        { "trigger": "tick", "condition": "true", "action": { "type": "schedule", "in": 1.0, "event": "production_complete", "target": "aztec" } }
+      ]
+    }
+  ]
+}

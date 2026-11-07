@@ -1,0 +1,33 @@
+{
+  "game_id": "civ_1_clone_001",
+  "containers": [
+    {
+      "id": "plains_1",
+      "name": "Great Plains",
+      "bounds": { "min": [0, 0, 0], "max": [10, 10, 1] },
+      "links": [],
+      "meta": { "tileset": "grass", "light": 1.0, "description": "A vast open plain, ripe for the taking." }
+    },
+    {
+      "id": "city_rome",
+      "name": "City of Rome",
+      "bounds": { "min": [0, 0, 0], "max": [5, 5, 1] },
+      "links": [],
+      "meta": { "tileset": "city", "light": 1.0, "description": "The eternal city." }
+    },
+    {
+      "id": "city_tenochtitlan",
+      "name": "Tenochtitlan",
+      "bounds": { "min": [0, 0, 0], "max": [5, 5, 1] },
+      "links": [],
+      "meta": { "tileset": "city", "light": 1.0, "description": "The Aztec capital." }
+    },
+    {
+      "id": "forest_1",
+      "name": "Dense Forest",
+      "bounds": { "min": [0, 0, 0], "max": [10, 10, 1] },
+      "links": [],
+      "meta": { "tileset": "forest", "light": 0.6, "description": "Thick canopy blocks the sun." }
+    }
+  ]
+}
